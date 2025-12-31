@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>St. Joseph Drug Inventory</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body{margin:0;font-family:Arial;background:#eef5f0}
+header{background:#1f7a3a;color:#fff;padding:14px;text-align:center;font-weight:bold}
+.wrapper{display:flex;max-width:1600px;margin:auto}
+aside{width:200px;background:#fff;border-right:1px solid #ccc;padding:8px}
+.loc{padding:6px;margin:4px 0;border-radius:4px;background:#e8f4ec;cursor:pointer;text-align:center}
+.loc.active{background:#1f7a3a;color:#fff}
+main{flex:1;padding:10px}
+.card{background:#fff;padding:10px;margin-bottom:10px;border-radius:6px}
+input,select,button{width:100%;padding:6px;margin:4px 0}
+button{background:#1f7a3a;color:#fff;border:none;border-radius:4px;cursor:pointer}
+
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{border:1px solid #ccc;padding:6px;text-align:center}
+th{background:#1f7a3a;color:#fff}
+
+.name{cursor:pointer;color:#1f7a3a;text-decoration:underline}
+.hidden{display:none}
+
+/* MODAL */
+.modal{
+ position:fixed;
+ inset:0;
+ background:rgba(0,0,0,.45);
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ z-index:9999;
+}
+.modal.hidden{display:none}
+.modal-box{
+ background:#fff;
+ padding:16px;
+ border-radius:8px;
+ width:400px;
+ max-height:85vh;
+ overflow:auto;
+}
+
+/* PRINT */
+@media print{
+ body *{visibility:hidden}
+ #printArea,#printArea *{visibility:visible}
+ #printArea{position:absolute;left:0;top:0;width:100%}
+ .page{page-break-after:always}
+}
+</style>
+</head>
+
+<body>
+<header>ST. JOSEPH DRUG INVENTORY CHECKLIST</header>
+
+<div class="wrapper">
+<aside>
+<b>LOCATORS</b>
+<div id="locatorPanel"></div>
+</aside>
+
+<main>
+
+<div class="card">
+<input id="searchBox" placeholder="Search A → AM → AMO">
+<select id="typeFilter">
+<option value="">ALL</option>
+<option value="Medicine">Medicine</option>
+<option value="Convenience">Convenience</option>
+</select>
+<button id="addBtn">➕ Add Item</button>
+</div>
+
+<div class="card hidden" id="formCard">
+<select id="f_type">
+<option>Medicine</option>
+<option>Convenience</option>
+</select>
+<input id="f_product" placeholder="Product Name">
+<input id="f_brand" placeholder="Brand Name">
+<input id="f_dosage" placeholder="Dosage">
+<input id="f_locator" placeholder="Locator (e.g. 1A)">
+<label>Expiration Date</label>
+<input id="f_exp" type="date">
+<input id="f_policy" type="number" placeholder="Return Policy (days)">
+<input id="f_sys" type="number" placeholder="System Stock">
+<input id="f_act" type="number" placeholder="Actual Stock">
+<button id="saveBtn">SAVE</button>
+<button id="cancelBtn">CANCEL</button>
+</div>
+
+<div class="card">
+<table>
+<thead>
+<tr>
+<th>Name</th><th>Brand</th><th>Dosage</th><th>Loc</th>
+<th>Exp</th><th>Policy</th>
+<th>S</th><th>A</th><th>V</th><th>Pull</th><th>Action</th>
+</tr>
+</thead>
+<tbody id="tableBody"></tbody>
+</table>
+</div>
+
+<div class="card">
+<h4>Expiry Calendar (Near Expiry / Expired)</h4>
+<ul id="expiryList"></ul>
+</div>
+
+<div class="card">
+<h4>Print by Locator</h4>
+<input id="printFrom" placeholder="FROM">
+<input id="printTo" placeholder="TO">
+<button id="printBtn">🖨️ PRINT</button>
+</div>
+
+</main>
+</div>
+
+<div id="printArea"></div>
+
+<!-- MODAL -->
+<div id="detailModal" class="modal hidden">
+<div class="modal-box">
+<h3>Item Details</h3>
+<div id="detailContent"></div>
+<button id="closeModalBtn">CLOSE</button>
+</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let items=JSON.parse(localStorage.getItem("inventory")||"[]");
+let editId=null,activeLocator="",activeType="";
+
+const save=()=>{localStorage.setItem("inventory",JSON.stringify(items));render();};
+const esc=s=>String(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
+const daysLeft=d=>Math.floor((new Date(d)-new Date())/86400000);
+
+/* FILTERS */
+searchBox.oninput=render;
+typeFilter.onchange=e=>{activeType=e.target.value;render();};
+
+/* ADD / SAVE */
+addBtn.onclick=()=>{editId=null;formCard.classList.remove("hidden");};
+cancelBtn.onclick=()=>formCard.classList.add("hidden");
+
+saveBtn.onclick=()=>{
+ if(!f_product.value||!f_locator.value){alert("Product and Locator required");return;}
+ const item={
+  id:editId||Date.now().toString(),
+  type:f_type.value,
+  product:f_product.value,
+  brand:f_brand.value,
+  dosage:f_dosage.value,
+  locator:f_locator.value.toUpperCase(),
+  exp:f_exp.value,
+  policy:+f_policy.value||0,
+  sys:+f_sys.value||0,
+  act:+f_act.value||0,
+  pulled:false
+ };
+ editId
+ ? items[items.findIndex(i=>i.id===editId)]=item
+ : items.push(item);
+ formCard.classList.add("hidden");
+ save();
+};
+
+/* MODAL */
+const modal=$("detailModal");
+const modalBox=modal.querySelector(".modal-box");
+
+function openModal(item){
+ detailContent.innerHTML=Object.entries(item)
+ .map(([k,v])=>`<b>${k}:</b> ${esc(v)}<br>`).join("");
+ modal.classList.remove("hidden");
+}
+function closeModal(){modal.classList.add("hidden");}
+
+closeModalBtn.onclick=closeModal;
+modal.onclick=e=>{if(e.target===modal)closeModal();}
+modalBox.onclick=e=>e.stopPropagation();
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal();});
+
+/* TABLE EVENTS */
+document.addEventListener("click",e=>{
+ const tr=e.target.closest("tr[data-id]");
+ if(!tr)return;
+ const i=items.find(x=>x.id===tr.dataset.id);
+
+ if(e.target.classList.contains("name")) openModal(i);
+ if(e.target.classList.contains("edit")){
+  editId=i.id;
+  Object.keys(i).forEach(k=>{const f=$("f_"+k);if(f)f.value=i[k]});
+  formCard.classList.remove("hidden");
+ }
+ if(e.target.classList.contains("del")&&confirm("Delete?")){
+  items=items.filter(x=>x.id!==i.id);save();
+ }
+ if(e.target.type==="checkbox"){i.pulled=e.target.checked;save();}
+});
+
+/* PRINT */
+printBtn.onclick=()=>{
+ const from=printFrom.value,to=printTo.value;
+ const locs=[...new Set(items.map(i=>i.locator))].sort()
+ .filter(l=>(!from||l>=from)&&(!to||l<=to));
+ printArea.innerHTML=locs.map(l=>{
+  const list=items.filter(i=>i.locator===l)
+  .sort((a,b)=>a.product.localeCompare(b.product));
+  return `<div class="page">
+  <h3>LOCATOR ${l}</h3>
+  <table>
+  <tr>
+   <th>PRODUCT</th>
+   <th>S</th><th>A</th><th>V</th><th>E</th><th>R</th>
+   <th></th>
+   <th>S</th><th>A</th><th>V</th><th>E</th><th>R</th>
+  </tr>
+  ${list.map(i=>`
+  <tr>
+   <td>${esc(i.product)}</td>
+   <td>${i.sys}</td><td>${i.act}</td><td>${i.act-i.sys}</td><td>${esc(i.exp)}</td><td></td>
+   <td></td>
+   <td>${i.sys}</td><td>${i.act}</td><td>${i.act-i.sys}</td><td>${esc(i.exp)}</td><td></td>
+  </tr>`).join("")}
+  <tr>
+   <td><b>TOTAL ITEMS</b></td>
+   <td colspan="11"><b>${list.length}</b></td>
+  </tr>
+  </table></div>`;
+ }).join("");
+ window.print();
+};
+
+/* RENDER */
+function render(){
+ tableBody.innerHTML="";
+ locatorPanel.innerHTML="";
+ expiryList.innerHTML="";
+ const q=searchBox.value.toLowerCase();
+
+ items.filter(i=>
+ (!activeLocator||i.locator===activeLocator)&&
+ (!activeType||i.type===activeType)&&
+ (!q||(i.product+i.brand+i.dosage).toLowerCase().includes(q))
+ ).sort((a,b)=>a.product.localeCompare(b.product))
+ .forEach(i=>{
+  tableBody.insertAdjacentHTML("beforeend",`
+  <tr data-id="${i.id}">
+   <td class="name">${esc(i.product)}</td>
+   <td>${esc(i.brand)}</td>
+   <td>${esc(i.dosage)}</td>
+   <td>${esc(i.locator)}</td>
+   <td>${esc(i.exp)}</td>
+   <td>${i.policy}</td>
+   <td>${i.sys}</td><td>${i.act}</td><td>${i.act-i.sys}</td>
+   <td><input type="checkbox" ${i.pulled?"checked":""}></td>
+   <td>
+    <button class="edit">✏️</button>
+    <button class="del">🗑️</button>
+   </td>
+  </tr>`);
+ });
+
+ /* EXPIRY CALENDAR */
+ items.filter(i=>
+  i.exp &&
+  !i.pulled &&
+  (daysLeft(i.exp)<=i.policy || daysLeft(i.exp)<=0)
+ ).sort((a,b)=>new Date(a.exp)-new Date(b.exp))
+ .forEach(i=>{
+  expiryList.insertAdjacentHTML("beforeend",
+   `<li>${esc(i.product)} (${i.locator}) – ${i.exp}</li>`
+  );
+ });
+
+ [...new Set(items.map(i=>i.locator))].sort().forEach(l=>{
+  const d=document.createElement("div");
+  d.className="loc"+(l===activeLocator?" active":"");
+  d.textContent=l;
+  d.onclick=()=>{activeLocator=activeLocator===l?"":l;render()};
+  locatorPanel.appendChild(d);
+ });
+}
+render();
+</script>
+</body>
+</html>
